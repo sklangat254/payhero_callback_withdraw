@@ -5,16 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Withdraw Test</title>
 <style>
-  body{font-family:Arial,sans-serif;max-width:440px;margin:30px auto;padding:16px}
+  body{font-family:Arial,sans-serif;max-width:460px;margin:30px auto;padding:16px}
   label{display:block;margin-top:12px;font-size:13px;color:#555}
-  input,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
+  input,select,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
   button{background:#2563eb;color:#fff;border:0;border-radius:8px;cursor:pointer;margin-top:16px}
   button:disabled{background:#999}
-  #out{margin-top:16px;padding:12px;border-radius:8px;background:#eee;white-space:pre-wrap;word-break:break-all;font-size:14px}
+  #out{margin-top:16px;padding:12px;border-radius:8px;background:#eee;white-space:pre-wrap;word-break:break-all;font-size:13px}
   .ok{background:#d4edda!important}.bad{background:#f8d7da!important}
-  .tabs{display:flex;gap:8px;margin-bottom:12px}
-  .tabs button{margin:0;background:#64748b}
-  .tabs button.active{background:#2563eb}
+  small{color:#666}
 </style>
 </head>
 <body>
@@ -32,54 +30,80 @@
 <label>Amount (KES)</label>
 <input id="amount" type="number" value="10" min="1">
 
+<label>Attempt</label>
+<select id="attempt">
+  <option value="F">F - official PayHero client payload (callback URL, no channel_id)</option>
+  <option value="G">G - same, empty callback_url</option>
+  <option value="H">H - channel_id 10752, no payment_service</option>
+  <option value="I">I - channel_id 4396 (vendor ID), no payment_service</option>
+  <option value="J">J - channel_id 4396 + payment_service b2c</option>
+</select>
+<small>PayHero blocks similar requests for 1 minute. The button unlocks after 65 seconds, and the amount goes up by 1 each time.</small>
+
 <button id="btn" onclick="withdraw()">Withdraw Now</button>
 <div id="out">Waiting...</div>
 
 <script>
 const out = document.getElementById("out");
 const btn = document.getElementById("btn");
-let timer = null;
+let timer = null, cool = null;
 
 function show(msg, cls){ out.textContent = msg; out.className = cls || ""; }
+
+function cooldown(){
+  let s = 65;
+  clearInterval(cool);
+  btn.disabled = true;
+  cool = setInterval(()=>{
+    s--;
+    btn.textContent = "Wait " + s + "s...";
+    if(s <= 0){
+      clearInterval(cool);
+      btn.disabled = false;
+      btn.textContent = "Withdraw Now";
+      const a = document.getElementById("amount");
+      a.value = Number(a.value) + 1;
+    }
+  }, 1000);
+}
 
 async function withdraw(){
   const api = document.getElementById("api").value.trim().replace(/\/$/, "");
   const key = document.getElementById("key").value.trim();
   const phone = document.getElementById("phone").value.trim();
   const amount = document.getElementById("amount").value;
+  const attempt = document.getElementById("attempt").value;
   if(!key || !phone || !amount){ show("Fill in key, phone and amount", "bad"); return; }
 
-  // new unique reference every time
   const reference = "WD-" + Date.now();
-
-  btn.disabled = true;
-  show("Sending withdrawal... (the first request may take up to a minute if the server is waking up)\nReference: " + reference);
+  cooldown();
+  show("Attempt " + attempt + ": sending... (the first request may take up to a minute if the server is waking up)\nReference: " + reference);
 
   try{
     const r = await fetch(api + "/withdraw", {
       method: "POST",
       headers: {"Content-Type":"application/json", "X-API-Key": key},
-      body: JSON.stringify({phone, amount, reference})
+      body: JSON.stringify({phone, amount, reference, attempt})
     });
     const d = await r.json();
     console.log(d);
 
     if(!d.success){
-      show("FAILED: " + (d.message || "unknown") + "\n\n" + JSON.stringify(d, null, 2), "bad");
-      btn.disabled = false;
+      show("ATTEMPT " + attempt + " FAILED\n\n" + (d.message || "unknown") +
+           "\n\nPayHero said:\n" + (d.payhero || "-") +
+           "\n\nSent:\n" + JSON.stringify(d.sent || {}, null, 2), "bad");
       return;
     }
 
-    show("Queued by PayHero.\nChecking status...\n\n" + JSON.stringify(d, null, 2));
-    poll(api, key, d.reference || reference);
+    show("ATTEMPT " + attempt + " QUEUED by PayHero.\nChecking status...\n\n" + JSON.stringify(d, null, 2));
+    poll(api, key, d.reference || reference, attempt);
 
   }catch(e){
     show("Connection error: " + e.message, "bad");
-    btn.disabled = false;
   }
 }
 
-function poll(api, key, ref){
+function poll(api, key, ref, attempt){
   let n = 0;
   clearInterval(timer);
   timer = setInterval(async ()=>{
@@ -89,24 +113,21 @@ function poll(api, key, ref){
         headers: {"X-API-Key": key}
       });
       const d = await r.json();
-      show("Check " + n + "/20 - state: " + d.state + " (PayHero: " + d.raw + ")\nReference: " + ref +
+      show("Attempt " + attempt + " - check " + n + "/20 - state: " + d.state + " (PayHero: " + d.raw + ")\nReference: " + ref +
            "\n\n" + JSON.stringify(d.detail || {}, null, 2));
 
       if(d.state === "COMPLETED"){
         clearInterval(timer);
-        show("WITHDRAWAL SUCCESSFUL - check your phone for the M-Pesa message.\nReference: " + ref, "ok");
-        btn.disabled = false;
+        show("ATTEMPT " + attempt + " WORKED - check your phone for the M-Pesa message.\nReference: " + ref, "ok");
       } else if(d.state === "FAILED"){
         clearInterval(timer);
-        show("WITHDRAWAL FAILED\nReference: " + ref + "\n\n" + JSON.stringify(d.detail || {}, null, 2), "bad");
-        btn.disabled = false;
+        show("ATTEMPT " + attempt + " FAILED AFTER QUEUING\nReference: " + ref + "\n\n" + JSON.stringify(d.detail || {}, null, 2), "bad");
       }
     }catch(e){ /* keep polling */ }
 
     if(n >= 20){
       clearInterval(timer);
       show("Status still unclear after 1 minute.\nCheck your phone and the Render logs.\nReference: " + ref, "bad");
-      btn.disabled = false;
     }
   }, 3000);
 }
