@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Withdraw Test</title>
+<style>
+  body{font-family:Arial,sans-serif;max-width:440px;margin:30px auto;padding:16px}
+  label{display:block;margin-top:12px;font-size:13px;color:#555}
+  input,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
+  button{background:#2563eb;color:#fff;border:0;border-radius:8px;cursor:pointer;margin-top:16px}
+  button:disabled{background:#999}
+  #out{margin-top:16px;padding:12px;border-radius:8px;background:#eee;white-space:pre-wrap;word-break:break-all;font-size:14px}
+  .ok{background:#d4edda!important}.bad{background:#f8d7da!important}
+  .tabs{display:flex;gap:8px;margin-bottom:12px}
+  .tabs button{margin:0;background:#64748b}
+  .tabs button.active{background:#2563eb}
+</style>
+</head>
+<body>
+<h2>Withdraw Test (B2C)</h2>
+
+<label>Backend URL</label>
+<input id="api" value="https://payhero-callback-setup.onrender.com">
+
+<label>API Key (the API_KEY value in app.py)</label>
+<input id="key" type="password" placeholder="your secret key">
+
+<label>Phone number</label>
+<input id="phone" type="tel" placeholder="0712345678">
+
+<label>Amount (KES)</label>
+<input id="amount" type="number" value="10" min="1">
+
+<button id="btn" onclick="withdraw()">Withdraw Now</button>
+<div id="out">Waiting...</div>
+
+<script>
+const out = document.getElementById("out");
+const btn = document.getElementById("btn");
+let timer = null;
+
+function show(msg, cls){ out.textContent = msg; out.className = cls || ""; }
+
+async function withdraw(){
+  const api = document.getElementById("api").value.trim().replace(/\/$/, "");
+  const key = document.getElementById("key").value.trim();
+  const phone = document.getElementById("phone").value.trim();
+  const amount = document.getElementById("amount").value;
+  if(!key || !phone || !amount){ show("Fill in key, phone and amount", "bad"); return; }
+
+  // new unique reference every time
+  const reference = "WD-" + Date.now();
+
+  btn.disabled = true;
+  show("Sending withdrawal... (the first request may take up to a minute if the server is waking up)\nReference: " + reference);
+
+  try{
+    const r = await fetch(api + "/withdraw", {
+      method: "POST",
+      headers: {"Content-Type":"application/json", "X-API-Key": key},
+      body: JSON.stringify({phone, amount, reference})
+    });
+    const d = await r.json();
+    console.log(d);
+
+    if(!d.success){
+      show("FAILED: " + (d.message || "unknown") + "\n\n" + JSON.stringify(d, null, 2), "bad");
+      btn.disabled = false;
+      return;
+    }
+
+    show("Queued by PayHero.\nChecking status...\n\n" + JSON.stringify(d, null, 2));
+    poll(api, key, d.reference || reference);
+
+  }catch(e){
+    show("Connection error: " + e.message, "bad");
+    btn.disabled = false;
+  }
+}
+
+function poll(api, key, ref){
+  let n = 0;
+  clearInterval(timer);
+  timer = setInterval(async ()=>{
+    n++;
+    try{
+      const r = await fetch(api + "/withdraw/status/" + encodeURIComponent(ref), {
+        headers: {"X-API-Key": key}
+      });
+      const d = await r.json();
+      show("Check " + n + "/20 - state: " + d.state + " (PayHero: " + d.raw + ")\nReference: " + ref +
+           "\n\n" + JSON.stringify(d.detail || {}, null, 2));
+
+      if(d.state === "COMPLETED"){
+        clearInterval(timer);
+        show("WITHDRAWAL SUCCESSFUL - check your phone for the M-Pesa message.\nReference: " + ref, "ok");
+        btn.disabled = false;
+      } else if(d.state === "FAILED"){
+        clearInterval(timer);
+        show("WITHDRAWAL FAILED\nReference: " + ref + "\n\n" + JSON.stringify(d.detail || {}, null, 2), "bad");
+        btn.disabled = false;
+      }
+    }catch(e){ /* keep polling */ }
+
+    if(n >= 20){
+      clearInterval(timer);
+      show("Status still unclear after 1 minute.\nCheck your phone and the Render logs.\nReference: " + ref, "bad");
+      btn.disabled = false;
+    }
+  }, 3000);
+}
+</script>
+</body>
+</html>
