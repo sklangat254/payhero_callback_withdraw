@@ -1,46 +1,112 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8">
+<html lang="en">
+<head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>HashBack Test</title>
 <style>
- body{font-family:Arial,sans-serif;max-width:460px;margin:30px auto;padding:16px}
- label{display:block;margin-top:12px;font-size:13px;color:#555}
- input,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
- button{background:#2563eb;color:#fff;border:0;border-radius:8px;margin-top:10px}
- button:disabled{background:#999}
- #out{margin-top:16px;padding:12px;background:#eee;border-radius:8px;white-space:pre-wrap;word-break:break-all;font-size:13px}
-</style></head><body>
+  body{font-family:Arial,sans-serif;max-width:460px;margin:30px auto;padding:16px}
+  label{display:block;margin-top:12px;font-size:13px;color:#555}
+  input,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
+  input[type=checkbox]{width:auto;margin-right:8px}
+  button{background:#2563eb;color:#fff;border:0;border-radius:8px;cursor:pointer;margin-top:10px}
+  button.green{background:#16a34a}
+  button:disabled{background:#999}
+  #out{margin-top:16px;padding:12px;border-radius:8px;background:#eee;white-space:pre-wrap;word-break:break-all;font-size:13px}
+  .ok{background:#d4edda!important}.bad{background:#f8d7da!important}
+  small{color:#666}
+</style>
+</head>
+<body>
 <h2>HashBack Wallet B2C Test</h2>
+
 <label>Backend URL</label>
 <input id="api" value="https://payhero-callback-setup.onrender.com">
-<label>API Key (the API_KEY in app.py)</label>
-<input id="key" type="password">
-<label>Phone</label><input id="phone" type="tel" placeholder="0712345678">
-<label>Amount (KES)</label><input id="amount" type="number" value="10">
-<label><input id="intl" type="checkbox" style="width:auto"> send as 2547... instead of 07...</label>
-<button onclick="bal()">Check wallet balance</button>
-<button onclick="wd()" id="wd">Withdraw</button>
+
+<label>Backend key (BACKEND_API_KEY in Render, or rt-test-key-2026 if you didn't set one)</label>
+<input id="key" type="password" placeholder="your backend key">
+
+<button onclick="balance()">1. Check wallet balance</button>
+
+<label>Phone number to receive the money</label>
+<input id="phone" type="tel" placeholder="0712345678">
+
+<label>Amount (KES)</label>
+<input id="amount" type="number" value="10" min="1">
+
+<label><input id="intl" type="checkbox">Send the number as 2547... instead of 07...</label>
+<small>Only tick this if the withdrawal is rejected for the number format.</small>
+
+<button id="wd" class="green" onclick="withdraw()">2. Withdraw</button>
+
 <div id="out">Waiting...</div>
+
 <script>
-const out=document.getElementById("out"), btn=document.getElementById("wd");
-const base=()=>document.getElementById("api").value.trim().replace(/\/$/,"");
-const hdr=()=>({"Content-Type":"application/json","X-API-Key":document.getElementById("key").value.trim()});
-async function call(path,body){
-  out.textContent="Working... (the first request may take up to a minute)";
-  try{
-    const r=await fetch(base()+path,{method:"POST",headers:hdr(),body:JSON.stringify(body)});
-    out.textContent="HTTP "+r.status+"\n\n"+JSON.stringify(await r.json(),null,2);
-  }catch(e){out.textContent="Connection error: "+e.message;}
+const out = document.getElementById("out");
+const btn = document.getElementById("wd");
+
+const base = () => document.getElementById("api").value.trim().replace(/\/$/, "");
+const hdr = () => ({
+  "Content-Type": "application/json",
+  "X-API-Key": document.getElementById("key").value.trim()
+});
+
+function show(msg, cls){ out.textContent = msg; out.className = cls || ""; }
+
+async function call(path, body){
+  const r = await fetch(base() + path, {
+    method: "POST",
+    headers: hdr(),
+    body: JSON.stringify(body)
+  });
+  let data;
+  try { data = await r.json(); } catch(e){ data = {error: "Reply was not JSON"}; }
+  return {status: r.status, data};
 }
-function bal(){call("/hb/balance",{});}
-async function wd(){
-  btn.disabled=true;
-  await call("/hb/withdraw",{
-    phone:document.getElementById("phone").value.trim(),
-    amount:document.getElementById("amount").value,
-    reference:"HB-"+Date.now(),
-    intl:document.getElementById("intl").checked});
-  setTimeout(()=>btn.disabled=false,5000);
+
+async function balance(){
+  if(!document.getElementById("key").value.trim()){ show("Enter the backend key first", "bad"); return; }
+  show("Checking balance... (the first request may take up to a minute if the server is waking up)");
+  try{
+    const {status, data} = await call("/hb/balance", {});
+    show("HTTP " + status + "\n\n" + JSON.stringify(data, null, 2),
+         data.success ? "ok" : "bad");
+  }catch(e){
+    show("Connection error: " + e.message, "bad");
+  }
+}
+
+async function withdraw(){
+  const key = document.getElementById("key").value.trim();
+  const phone = document.getElementById("phone").value.trim();
+  const amount = document.getElementById("amount").value;
+  const intl = document.getElementById("intl").checked;
+
+  if(!key || !phone || !amount){ show("Fill in the key, phone and amount", "bad"); return; }
+  if(!confirm("Send KES " + amount + " to " + phone + "?")) return;
+
+  btn.disabled = true;
+  const reference = "HB-" + Date.now();
+  show("Sending withdrawal...\nReference: " + reference);
+
+  try{
+    const {status, data} = await call("/hb/withdraw", {phone, amount, reference, intl});
+    const text = "HTTP " + status + "\n\n" + JSON.stringify(data, null, 2);
+
+    if(data.success){
+      show("WITHDRAWAL ACCEPTED - check your phone for the M-Pesa message.\n\n" + text, "ok");
+      // show the new balance so you can see the fee
+      setTimeout(balance, 3000);
+    } else {
+      show("WITHDRAWAL NOT COMPLETED\n\n" + text +
+           "\n\nIf it says Network error or Unclear reply, check the balance before trying again.", "bad");
+    }
+  }catch(e){
+    show("Connection error: " + e.message +
+         "\n\nThe request may or may not have gone through. Check the wallet balance before trying again.", "bad");
+  }finally{
+    setTimeout(()=>{ btn.disabled = false; }, 8000);
+  }
 }
 </script>
 </body>
