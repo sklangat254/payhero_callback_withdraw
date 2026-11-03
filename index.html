@@ -3,14 +3,14 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>HashBack Test</title>
+<title>Aviator Payments Test</title>
 <style>
-  body{font-family:Arial,sans-serif;max-width:460px;margin:30px auto;padding:16px}
-  label{display:block;margin-top:12px;font-size:13px;color:#555}
+  body{font-family:Arial,sans-serif;max-width:480px;margin:24px auto;padding:16px}
+  h2{margin-bottom:4px} h3{margin:22px 0 4px;border-top:1px solid #ddd;padding-top:14px}
+  label{display:block;margin-top:10px;font-size:13px;color:#555}
   input,button{width:100%;padding:12px;margin:4px 0;font-size:16px;box-sizing:border-box}
-  input[type=checkbox]{width:auto;margin-right:8px}
-  button{background:#2563eb;color:#fff;border:0;border-radius:8px;cursor:pointer;margin-top:10px}
-  button.green{background:#16a34a}
+  button{background:#2563eb;color:#fff;border:0;border-radius:8px;cursor:pointer;margin-top:8px}
+  button.green{background:#16a34a} button.orange{background:#ea580c}
   button:disabled{background:#999}
   #out{margin-top:16px;padding:12px;border-radius:8px;background:#eee;white-space:pre-wrap;word-break:break-all;font-size:13px}
   .ok{background:#d4edda!important}.bad{background:#f8d7da!important}
@@ -18,95 +18,124 @@
 </style>
 </head>
 <body>
-<h2>HashBack Wallet B2C Test</h2>
+<h2>Aviator Payments Test</h2>
+<small>Talks to your Render backend. Balances live in Firebase at aviator_users/&lt;2547...&gt;/balance</small>
 
 <label>Backend URL</label>
 <input id="api" value="https://payhero-callback-setup.onrender.com">
 
-<label>Backend key (BACKEND_API_KEY in Render, or rt-test-key-2026 if you didn't set one)</label>
+<label>Backend key (BACKEND_API_KEY from Render)</label>
 <input id="key" type="password" placeholder="your backend key">
 
-<button onclick="balance()">1. Check wallet balance</button>
+<label>Account number (the registered number, 07... or 2547...)</label>
+<input id="uid" type="tel" placeholder="0712345678">
 
-<label>Phone number to receive the money</label>
-<input id="phone" type="tel" placeholder="0712345678">
+<h3>Balances</h3>
+<button onclick="srvBal()">Check player's server balance</button>
+<button onclick="hbBal()">Check HashBack wallet balance</button>
 
+<h3>Deposit (STK push)</h3>
+<label>M-Pesa number that pays (can be different from the account)</label>
+<input id="dphone" type="tel" placeholder="0712345678">
 <label>Amount (KES)</label>
-<input id="amount" type="number" value="10" min="1">
+<input id="damount" type="number" value="10" min="1">
+<button class="orange" id="dep" onclick="deposit()">Deposit</button>
 
-<label><input id="intl" type="checkbox">Send the number as 2547... instead of 07...</label>
-<small>Only tick this if the withdrawal is rejected for the number format.</small>
+<h3>Withdraw (always to the account number)</h3>
+<label>Amount (KES)</label>
+<input id="wamount" type="number" value="100" min="1">
+<button class="green" id="wd" onclick="withdraw()">Withdraw</button>
 
-<button id="wd" class="green" onclick="withdraw()">2. Withdraw</button>
+<h3>Game money (test /bal/adjust)</h3>
+<label>Amount (KES)</label>
+<input id="gamount" type="number" value="10" min="1">
+<button onclick="adjust('bet')">Place bet (take stake)</button>
+<button onclick="adjust('win')">Cash out (add payout)</button>
 
 <div id="out">Waiting...</div>
 
 <script>
 const out = document.getElementById("out");
-const btn = document.getElementById("wd");
-
-const base = () => document.getElementById("api").value.trim().replace(/\/$/, "");
-const hdr = () => ({
-  "Content-Type": "application/json",
-  "X-API-Key": document.getElementById("key").value.trim()
-});
-
+const $ = id => document.getElementById(id);
+const base = () => $("api").value.trim().replace(/\/$/, "");
+const hdr = () => ({"Content-Type":"application/json","X-API-Key":$("key").value.trim()});
 function show(msg, cls){ out.textContent = msg; out.className = cls || ""; }
-
-async function call(path, body){
-  const r = await fetch(base() + path, {
-    method: "POST",
-    headers: hdr(),
-    body: JSON.stringify(body)
-  });
+function need(){
+  if(!$("key").value.trim()){ show("Enter the backend key first","bad"); return false; }
+  if(!$("uid").value.trim()){ show("Enter the account number first","bad"); return false; }
+  return true;
+}
+async function call(method, path, body){
+  const opt = {method, headers: hdr()};
+  if(body !== undefined) opt.body = JSON.stringify(body);
+  const r = await fetch(base() + path, opt);
   let data;
-  try { data = await r.json(); } catch(e){ data = {error: "Reply was not JSON"}; }
-  return {status: r.status, data};
+  try { data = await r.json(); } catch(e){ data = {error:"Reply was not JSON"}; }
+  return {status:r.status, data};
+}
+const fmt = ({status,data}) => "HTTP " + status + "\n\n" + JSON.stringify(data,null,2);
+const WAKE = "(the first request may take up to a minute if the server is waking up)";
+
+async function srvBal(){
+  if(!need()) return;
+  show("Checking player's balance... " + WAKE);
+  try{ const r = await call("POST","/bal/get",{uid:$("uid").value.trim()}); show(fmt(r), r.data.success?"ok":"bad"); }
+  catch(e){ show("Connection error: "+e.message,"bad"); }
+}
+async function hbBal(){
+  if(!$("key").value.trim()){ show("Enter the backend key first","bad"); return; }
+  show("Checking HashBack wallet... " + WAKE);
+  try{ const r = await call("POST","/hb/balance",{}); show(fmt(r), r.data.success?"ok":"bad"); }
+  catch(e){ show("Connection error: "+e.message,"bad"); }
 }
 
-async function balance(){
-  if(!document.getElementById("key").value.trim()){ show("Enter the backend key first", "bad"); return; }
-  show("Checking balance... (the first request may take up to a minute if the server is waking up)");
+async function deposit(){
+  if(!need()) return;
+  const phone = $("dphone").value.trim() || $("uid").value.trim();
+  const amount = $("damount").value;
+  if(!confirm("Send an STK push of KES "+amount+" to "+phone+"?")) return;
+  $("dep").disabled = true;
+  show("Sending STK push... " + WAKE);
   try{
-    const {status, data} = await call("/hb/balance", {});
-    show("HTTP " + status + "\n\n" + JSON.stringify(data, null, 2),
-         data.success ? "ok" : "bad");
-  }catch(e){
-    show("Connection error: " + e.message, "bad");
-  }
+    const r = await call("POST","/pay",{uid:$("uid").value.trim(), phone, amount});
+    if(!r.data.success){ show("DEPOSIT NOT STARTED\n\n"+fmt(r),"bad"); $("dep").disabled=false; return; }
+    const ref = r.data.reference;
+    for(let i=1;i<=40;i++){
+      show("Check your phone and enter your M-Pesa PIN.\nReference: "+ref+"\nChecking payment ("+i+"/40)...");
+      await new Promise(res=>setTimeout(res,3000));
+      const s = await call("GET","/status/"+ref);
+      if(s.data.state === "COMPLETED"){ show("PAID\n\n"+fmt(s),"ok"); $("dep").disabled=false; return; }
+      if(s.data.state === "FAILED"){ show("PAYMENT FAILED OR CANCELLED\n\n"+fmt(s),"bad"); $("dep").disabled=false; return; }
+    }
+    show("Still pending after 2 minutes. Reference: "+ref+"\nTap Check player's balance in a moment.","bad");
+  }catch(e){ show("Connection error: "+e.message,"bad"); }
+  $("dep").disabled = false;
 }
 
 async function withdraw(){
-  const key = document.getElementById("key").value.trim();
-  const phone = document.getElementById("phone").value.trim();
-  const amount = document.getElementById("amount").value;
-  const intl = document.getElementById("intl").checked;
-
-  if(!key || !phone || !amount){ show("Fill in the key, phone and amount", "bad"); return; }
-  if(!confirm("Send KES " + amount + " to " + phone + "?")) return;
-
-  btn.disabled = true;
-  const reference = "HB-" + Date.now();
-  show("Sending withdrawal...\nReference: " + reference);
-
+  if(!need()) return;
+  const uid = $("uid").value.trim();
+  const amount = $("wamount").value;
+  if(!confirm("Withdraw KES "+amount+" to "+uid+"? (charges are taken from this amount)")) return;
+  $("wd").disabled = true;
+  const reference = "WD" + uid + Date.now();
+  show("Sending withdrawal...\nReference: "+reference+"\n"+WAKE);
   try{
-    const {status, data} = await call("/hb/withdraw", {uid: phone, phone, amount, reference, intl});
-    const text = "HTTP " + status + "\n\n" + JSON.stringify(data, null, 2);
-
-    if(data.success){
-      show("WITHDRAWAL ACCEPTED - check your phone for the M-Pesa message.\n\n" + text, "ok");
-      // show the new balance so you can see the fee
-      setTimeout(balance, 3000);
-    } else {
-      show("WITHDRAWAL NOT COMPLETED\n\n" + text +
-           "\n\nIf it says Network error or Unclear reply, check the balance before trying again.", "bad");
-    }
+    const r = await call("POST","/hb/withdraw",{uid, amount, reference});
+    const ok = r.data.success;
+    show((ok?"WITHDRAWAL ACCEPTED - check your phone.\n\n":"WITHDRAWAL NOT COMPLETED\n\n")+fmt(r)+
+      (ok?"":"\n\nIf it says 'being checked', do not retry. Look at aviator_wd/"+reference+" in Firebase."), ok?"ok":"bad");
   }catch(e){
-    show("Connection error: " + e.message +
-         "\n\nThe request may or may not have gone through. Check the wallet balance before trying again.", "bad");
-  }finally{
-    setTimeout(()=>{ btn.disabled = false; }, 8000);
-  }
+    show("Connection error: "+e.message+"\n\nThe request may or may not have gone through. Check the balance before trying again.","bad");
+  }finally{ setTimeout(()=>{ $("wd").disabled=false; }, 8000); }
+}
+
+async function adjust(kind){
+  if(!need()) return;
+  try{
+    const r = await call("POST","/bal/adjust",{uid:$("uid").value.trim(), kind, amount:$("gamount").value});
+    show(fmt(r), r.data.success?"ok":"bad");
+  }catch(e){ show("Connection error: "+e.message,"bad"); }
 }
 </script>
 </body>
