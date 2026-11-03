@@ -90,7 +90,7 @@ async function withdraw(){
   show("Sending withdrawal...\nReference: " + reference);
 
   try{
-    const {status, data} = await call("/hb/withdraw", {phone, amount, reference, intl});
+    const {status, data} = await call("/hb/withdraw", {uid: phone, phone, amount, reference, intl});
     const text = "HTTP " + status + "\n\n" + JSON.stringify(data, null, 2);
 
     if(data.success){
